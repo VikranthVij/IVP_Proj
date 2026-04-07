@@ -79,7 +79,7 @@ def upscale_ai(image, target_size):
 
 def apply_sharpening(image):
     """
-    Apply a sharpening filter to the image to improve visual clarity.
+    Apply a harsh sharpening filter to the image to improve visual clarity for standard algorithms.
     Using a stronger kernel to make the sharpening differences more pronounced.
     """
     kernel = np.array([[-1, -1, -1],
@@ -88,6 +88,15 @@ def apply_sharpening(image):
     
     sharpened = cv2.filter2D(image, -1, kernel)
     return sharpened
+
+def clarify_ai_image(image):
+    """
+    Applies Unsharp Masking to naturally clear up blurriness inherent in ESPCN subpixel inferences
+    without generating harsh artifact rings like standard sharpening matrices.
+    """
+    blurred = cv2.GaussianBlur(image, (0, 0), 2.5)
+    clarified = cv2.addWeighted(image, 1.6, blurred, -0.6, 0)
+    return clarified
 
 def compute_metrics(original, processed):
     """
@@ -241,6 +250,10 @@ def main():
     bilinear_out = upscale_bilinear(low_res_img, target_size)
     nearest_out = upscale_nearest(low_res_img, target_size)
     ai_out = upscale_ai(low_res_img, target_size)
+    
+    # Optional unblur smoothing for the AI network natively natively implemented here
+    ai_out = clarify_ai_image(ai_out)
+    
     sharpened_bicubic_out = apply_sharpening(bicubic_out)
     
     results = {}
