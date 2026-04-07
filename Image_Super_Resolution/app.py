@@ -51,6 +51,18 @@ apply_sharpening_bool = st.sidebar.checkbox(
     help="This applies Unsharp Masking/Laplacian algorithms dynamically to unblur upscale outputs automatically."
 )
 
+st.sidebar.markdown("---")
+apply_pixel_art = st.sidebar.checkbox(
+    "👾 Enable Pixel-Art De-blockify Mode", 
+    value=False,
+    help="If your image is made of huge bloated pixel blocks, this destroys them cleanly before intelligent smoothing."
+)
+
+if apply_pixel_art:
+    block_size = st.sidebar.number_input("Estimated Block Width (Pixels):", min_value=1, max_value=100, value=16)
+else:
+    block_size = 1
+
 # -----------------------------
 # Upload Image Area
 # -----------------------------
@@ -71,16 +83,27 @@ if uploaded_file is not None:
 
     if st.button("🚀 Upscale Image Now", use_container_width=True, type="primary"):
         with st.spinner(f"Super-Res engine crunching {target_size[0]}x{target_size[1]} frame sizes natively inline... Please wait."):
+            
+            # --- De-Blockify Processing ---
+            if apply_pixel_art and block_size > 1:
+                tiny_w = max(1, width // block_size)
+                tiny_h = max(1, height // block_size)
+                work_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
+                st.info(f"Analyzed structural resolution. Image block architecture gracefully minimized to: **{tiny_w}x{tiny_h} px**.")
+            else:
+                work_img = low_res
+
             # -----------------------------
             # Interlinked Core Algorithm Handling
             # -----------------------------
             if "Deep Learning" in upscale_method:
-                output = upscale_ai(low_res, target_size)
+                # Notice we explicitly use work_img which handles both normal sizes and crushed sizes securely
+                output = upscale_ai(work_img, target_size)
                 if apply_sharpening_bool:
                     # Unsharp mask for explicitly smoothing AI logic
                     output = clarify_ai_image(output)
             else:
-                output = upscale_bicubic(low_res, target_size)
+                output = upscale_bicubic(work_img, target_size)
                 if apply_sharpening_bool:
                     # Intense standard filter
                     output = apply_sharpening(output)
