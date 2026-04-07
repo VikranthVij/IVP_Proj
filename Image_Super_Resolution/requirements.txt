@@ -2,3 +2,5 @@ opencv-contrib-python
 numpy
 matplotlib
 scikit-image
+streamlit
+streamlit-image-comparison

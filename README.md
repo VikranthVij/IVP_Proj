@@ -27,7 +27,10 @@ Install dependencies and run interactively:
 # Strongly recommended to run within a virtual python environment
 pip install -r Image_Super_Resolution/requirements.txt
 
-# Run the pipeline
+# Run the traditional CLI pipeline
 python Image_Super_Resolution/src/main.py
+
+# OR launch the sleek Web Application Interface
+streamlit run Image_Super_Resolution/app.py
 ```
 *Note: Ensure `opencv-contrib-python` is strictly installed over standard `opencv-python` to harness the `cv2.dnn_superres` neural networks properly!*
