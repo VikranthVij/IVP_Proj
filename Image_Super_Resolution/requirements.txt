@@ -4,3 +4,4 @@ matplotlib
 scikit-image
 streamlit
 streamlit-image-comparison
+pandas

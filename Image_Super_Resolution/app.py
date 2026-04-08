@@ -11,8 +11,11 @@ from src.main import (
     upscale_bicubic, 
     upscale_lanczos, 
     clarify_image,
-    apply_sharpening
+    apply_sharpening,
+    compute_metrics,
+    upscale_nearest
 )
+import pandas as pd
 
 from streamlit_image_comparison import image_comparison
 
@@ -30,7 +33,16 @@ st.markdown(
 # -----------------------------
 # Neat Sidebar Configuration
 # -----------------------------
-st.sidebar.header("⚙ Processing Controls")
+st.sidebar.header("🕹️ Primary Operation Mode")
+operation_mode = st.sidebar.radio(
+    "Select Workflow Type:",
+    ["🚀 Practical Upscale (Directly enlarge a low-res image)", 
+     "🔬 Scientific Evaluation (Destroy & Reconstruct a hi-res image)"],
+    help="Choose whether you want to actually upscale a small picture, or mathematically simulate destruction on a 2K picture to benchmark algorithm accuracy."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.header("⚙ Processing Algorithms")
 upscale_method = st.sidebar.radio(
     "Select Upscaling Engine:", 
     ["Lanczos-4 Interpolation (Advanced IVP)", "Mathematical Bicubic"]
@@ -77,36 +89,73 @@ if uploaded_file is not None:
     low_res = cv2.cvtColor(low_res, cv2.COLOR_BGR2RGB)
     
     height, width = low_res.shape[:2]
-    target_size = (int(width * scale_factor), int(height * scale_factor))
+    
+    if "Practical Upscale" in operation_mode:
+        t_size = (int(width * scale_factor), int(height * scale_factor))
+        st.info(f"Target Output Dimension rendering out to: **{t_size[0]} x {t_size[1]}** pixels")
+    else:
+        # Scientific Evaluation
+        t_size = (width, height)
+        eval_tiny_w = max(1, width // scale_factor)
+        eval_tiny_h = max(1, height // scale_factor)
+        st.info(f"Evaluation Parameters: Destroying Original Image down to **{eval_tiny_w}x{eval_tiny_h}**, then meticulously mathematically reconstructing it back up to {width}x{height} to measure structural retention.")
 
-    st.info(f"Target Output Dimension rendering out to: **{target_size[0]} x {target_size[1]}** pixels")
-
-    if st.button("🚀 Upscale Base Image Now", use_container_width=True, type="primary"):
-        with st.spinner(f"Super-Res engine crunching {target_size[0]}x{target_size[1]} frame sizes natively inline..."):
+    if st.button("🚀 Execute Processing Engine", use_container_width=True, type="primary"):
+        with st.spinner(f"Super-Res engine crunching matrix frames natively inline..."):
             
-            # --- De-Blockify Processing ---
-            if apply_pixel_art and block_size > 1:
-                tiny_w = max(1, width // block_size)
-                tiny_h = max(1, height // block_size)
-                work_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
-                st.info(f"Analyzed structural resolution. Image block architecture minimized to: **{tiny_w}x{tiny_h} px**.")
-            else:
-                work_img = low_res
+            if "Practical Upscale" in operation_mode:
+                # --- Practical Upscale Mode ---
+                # --- De-Blockify Processing ---
+                if apply_pixel_art and block_size > 1:
+                    tiny_w = max(1, width // block_size)
+                    tiny_h = max(1, height // block_size)
+                    work_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
+                    st.info(f"Analyzed structural resolution. Image block architecture minimized to: **{tiny_w}x{tiny_h} px**.")
+                else:
+                    work_img = low_res
 
-            # --- Base Architecture Engine ---
-            if "Lanczos" in upscale_method:
-                output = upscale_lanczos(work_img, target_size)
+                # --- Base Architecture Engine ---
+                if "Lanczos" in upscale_method:
+                    output = upscale_lanczos(work_img, t_size)
+                else:
+                    output = upscale_bicubic(work_img, t_size)
+                    if clarity_strength > 5.0:
+                       output = apply_sharpening(output) 
+                       
+                st.session_state["input_preview"] = cv2.resize(low_res, t_size, interpolation=cv2.INTER_NEAREST)
+                st.session_state["eval_metrics"] = None
+                
             else:
-                output = upscale_bicubic(work_img, target_size)
-                # Hard filter pre-calculation fallback for massive scaling
-                if clarity_strength > 5.0:
-                   output = apply_sharpening(output) 
-            
+                # --- Scientific Evaluation Mode ---
+                # "low_res" is completely High-Res ground truth. Destroy it down!
+                destroyed_img = cv2.resize(low_res, (eval_tiny_w, eval_tiny_h), interpolation=cv2.INTER_AREA)
+                
+                if "Lanczos" in upscale_method:
+                    output = upscale_lanczos(destroyed_img, t_size)
+                else:
+                    output = upscale_bicubic(destroyed_img, t_size)
+                    if clarity_strength > 5.0:
+                       output = apply_sharpening(output) 
+                
+                # --- Graphical Analytics Computation ---
+                n_out = upscale_nearest(destroyed_img, t_size)
+                b_out = upscale_bicubic(destroyed_img, t_size)
+                l_out = upscale_lanczos(destroyed_img, t_size)
+                if clarity_strength > 0:
+                    l_out = clarify_image(l_out, strength=clarity_strength)
+
+                st.session_state["eval_metrics"] = {
+                    "Nearest Neighbor (Raw baseline)": compute_metrics(low_res, n_out),
+                    "Generic Bicubic math": compute_metrics(low_res, b_out),
+                    "Advanced IVP (Lanczos)": compute_metrics(low_res, l_out)
+                }
+                
+                st.session_state["input_preview"] = low_res  # Visual Slider statically compares Ground Truth vs output!
+
             st.session_state["base_upscaled"] = output
-            st.session_state["input_resized"] = cv2.resize(low_res, target_size, interpolation=cv2.INTER_NEAREST)
-            st.session_state["target_size"] = target_size
+            st.session_state["target_size"] = t_size
             st.session_state["upscale_method"] = upscale_method
-            st.success("Successfully computed scaling matrix! You can now freely adjust the Unblur slider.")
+            st.success("Successfully computed output matrix! You can now freely adjust the Unblur slider below.")
 
 # -----------------------------
 # LIVE UI VISUALIZATION POOL
@@ -115,7 +164,7 @@ if "base_upscaled" in st.session_state:
     st.divider()
     
     base_out = st.session_state["base_upscaled"]
-    inp_res = st.session_state["input_resized"]
+    inp_preview = st.session_state["input_preview"]
     t_size = st.session_state["target_size"]
     u_method = st.session_state["upscale_method"]
 
@@ -130,14 +179,14 @@ if "base_upscaled" in st.session_state:
     
     # -- Protection Against Gigantic Protobuf Crashes (> 4K monitors) --
     # Streamlit crashes if forced to beam gigabytes of raw matrices straight into HTML iframes.
-    disp_img1 = inp_res
+    disp_img1 = inp_preview
     disp_img2 = final_output
     
     MAX_UI_DIM = 2500
     if t_size[0] > MAX_UI_DIM or t_size[1] > MAX_UI_DIM:
         scale_down = min(MAX_UI_DIM / t_size[0], MAX_UI_DIM / t_size[1])
         safe_ui_size = (int(t_size[0] * scale_down), int(t_size[1] * scale_down))
-        disp_img1 = cv2.resize(inp_res, safe_ui_size, interpolation=cv2.INTER_AREA)
+        disp_img1 = cv2.resize(inp_preview, safe_ui_size, interpolation=cv2.INTER_AREA)
         disp_img2 = cv2.resize(final_output, safe_ui_size, interpolation=cv2.INTER_AREA)
         
         st.warning(f"⚠️ **Preview Scaled Down:** Your upscaled {t_size[0]}x{t_size[1]} image is so phenomenally large that rendering it live would crash the browser! The slider preview below has been constrained to {safe_ui_size[0]}x{safe_ui_size[1]}, but your **Download Button** still exports the full, uncompressed {t_size[0]}x{t_size[1]} masterpiece.")
@@ -154,6 +203,27 @@ if "base_upscaled" in st.session_state:
         make_responsive=True,
         in_memory=True
     )
+
+    # --- Live Metric Graph Viewing ---
+    if "eval_metrics" in st.session_state and st.session_state["eval_metrics"] is not None:
+        st.divider()
+        st.subheader("📈 Scientific Accuracy Benchmarks")
+        st.markdown("Because we enabled analytics, our system successfully simulated extreme data loss under the hood by physically destroying the image data, then forcefully reconstructing it using the 3 absolute core methods.")
+        
+        metrics = st.session_state["eval_metrics"]
+        df = pd.DataFrame({
+            "Algorithmic Approach": list(metrics.keys()),
+            "PSNR Accuracy Score (dB)": [m["PSNR"] for m in metrics.values()],
+            "SSIM Structural Score": [m["SSIM"] for m in metrics.values()]
+        }).set_index("Algorithmic Approach")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Peak Signal-to-Noise Ratio** *(Measures how little noise/corruption occurred. Taller bar = exceptionally cleaner image)*")
+            st.bar_chart(df[["PSNR Accuracy Score (dB)"]], color="#B48B36")
+        with c2:
+            st.markdown("**Structural Similarity Index** *(Measures mathematically pure edge retention. Closer to 1.0 = flawlessly crisp)*")
+            st.bar_chart(df[["SSIM Structural Score"]], color="#FFFFFF")
 
     st.divider()
 
