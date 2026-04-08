@@ -51,31 +51,13 @@ def upscale_nearest(image, target_size):
     """
     return cv2.resize(image, target_size, interpolation=cv2.INTER_NEAREST)
 
-def upscale_ai(image, target_size):
+def upscale_lanczos(image, target_size):
     """
-    Upscale using Deep Learning ESPCN model to achieve real Super Resolution.
-    Currently uses an x4 model and resizes to target_size seamlessly.
+    Upscale using purely IVP concepts: Lanczos-4 Mathematical Interpolation.
+    Lanczos builds upon Sinc functions to structurally preserve edges much 
+    better than Bicubic, serving as a powerful standard alternative to Deep Learning.
     """
-    if not hasattr(cv2, 'dnn_superres'):
-        print("\n[!] Warning: AI Super Resolution requires 'opencv-contrib-python' instead of standard 'opencv-python'.")
-        print("    Please run: pip uninstall opencv-python && pip install opencv-contrib-python")
-        print("    Falling back to standard Bicubic Interpolation for the 'AI' panel.\n")
-        return upscale_bicubic(image, target_size)
-        
-    sr = cv2.dnn_superres.DnnSuperResImpl_create()
-    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../data", "ESPCN_x4.pb")
-    if not os.path.exists(model_path):
-        print(f"Warning: AI Model not found at {model_path}. Falling back to Bicubic.")
-        return upscale_bicubic(image, target_size)
-        
-    sr.readModel(model_path)
-    sr.setModel("espcn", 4)
-    result = sr.upsample(image)
-    
-    if result.shape[:2] != (target_size[1], target_size[0]):
-        # Match user's requested display multiplier size precisely with CUBIC instead of AREA to prevent blockiness
-        result = cv2.resize(result, target_size, interpolation=cv2.INTER_CUBIC)
-    return result
+    return cv2.resize(image, target_size, interpolation=cv2.INTER_LANCZOS4)
 
 def apply_sharpening(image):
     """
@@ -258,10 +240,10 @@ def main():
     bicubic_out = upscale_bicubic(low_res_img, target_size)
     bilinear_out = upscale_bilinear(low_res_img, target_size)
     nearest_out = upscale_nearest(low_res_img, target_size)
-    ai_out = upscale_ai(low_res_img, target_size)
+    lanczos_out = upscale_lanczos(low_res_img, target_size)
     
-    # Optional unblur smoothing natively implemented here for the AI variant
-    ai_out = clarify_image(ai_out, strength=1.5)
+    # Optional unblur smoothing natively implemented here for the Lanczos variant
+    ivp_clarified_out = clarify_image(lanczos_out, strength=1.5)
     
     sharpened_bicubic_out = apply_sharpening(bicubic_out)
     
@@ -273,7 +255,7 @@ def main():
             "Sharpened Bicubic": compute_metrics(original_img, sharpened_bicubic_out),
             "Bilinear": compute_metrics(original_img, bilinear_out),
             "Nearest Neighbor": compute_metrics(original_img, nearest_out),
-            "AI (ESPCN)": compute_metrics(original_img, ai_out)
+            "Lanczos IVP": compute_metrics(original_img, ivp_clarified_out)
         }
         print_metrics(results)
     
@@ -291,7 +273,7 @@ def main():
     images_to_display["Bilinear Output"] = bilinear_out
     images_to_display["Bicubic Output"] = bicubic_out
     images_to_display["Sharpened Bicubic"] = sharpened_bicubic_out
-    images_to_display["AI Super Res (ESPCN)"] = ai_out
+    images_to_display["Advanced IVP (Lanczos)"] = ivp_clarified_out
     
     print("\n[*] Computations complete! Displaying the comparison pictures as a single image.")
     print("    --> IMPORTANT: Close the image window when you are done to continue the terminal prompt. <--")
@@ -316,7 +298,7 @@ def main():
     print(f"\n[+] Saving generated artifacts to '{out_dir}/' ...")
     
     # Save the absolute definitive final result completely independently and clearly
-    final_best_output = ai_out 
+    final_best_output = ivp_clarified_out 
     final_output_path = os.path.join(out_dir, "SUPER_RESOLVED_FINAL_OUTPUT.png")
     cv2.imwrite(final_output_path, cv2.cvtColor(final_best_output, cv2.COLOR_RGB2BGR))
     print(f"    -> [🏆] Saved Your Awesome Final Upscaled Picture to: {final_output_path}")

@@ -9,7 +9,7 @@ import os
 sys.path.append(os.path.dirname(__file__))
 from src.main import (
     upscale_bicubic, 
-    upscale_ai, 
+    upscale_lanczos, 
     clarify_image,
     apply_sharpening
 )
@@ -23,8 +23,8 @@ st.set_page_config(layout="wide", page_title="AI Super Resolution Studio", page_
 # -----------------------------
 st.title("🌟 AI Super Resolution Studio")
 st.markdown(
-    "Easily upload images to neatly upscale them using completely integrated Python logic. "
-    "Switch between rigid math (Bicubic) or our natively embedded neural networks (ESPCN)!"
+    "Easily upload images to neatly upscale them using completely integrated mathematically rigorous IVP logic. "
+    "Switch between standard rigid math (Bicubic) or our advanced structural interpolations (Lanczos-4)!"
 )
 
 # -----------------------------
@@ -33,7 +33,7 @@ st.markdown(
 st.sidebar.header("⚙ Processing Controls")
 upscale_method = st.sidebar.radio(
     "Select Upscaling Engine:", 
-    ["Deep Learning AI (ESPCN)", "Mathematical Bicubic"]
+    ["Lanczos-4 Interpolation (Advanced IVP)", "Mathematical Bicubic"]
 )
 
 num_cols = st.sidebar.columns([1])
@@ -94,8 +94,8 @@ if uploaded_file is not None:
                 work_img = low_res
 
             # --- Base Architecture Engine ---
-            if "Deep Learning" in upscale_method:
-                output = upscale_ai(work_img, target_size)
+            if "Lanczos" in upscale_method:
+                output = upscale_lanczos(work_img, target_size)
             else:
                 output = upscale_bicubic(work_img, target_size)
                 # Hard filter pre-calculation fallback for massive scaling
@@ -160,10 +160,11 @@ if "base_upscaled" in st.session_state:
     st.subheader("3. 📥 Download Finalized Export")
     st.markdown("Your image has been firmly processed. Preserve the super resolved `.png` natively onto your machine.")
     
-    # Binary buffered writing format
+    # Binary buffered writing
     is_success, buffer = cv2.imencode(".png", cv2.cvtColor(final_output, cv2.COLOR_RGB2BGR))
     io_buf = io.BytesIO(buffer)
-    file_name = f"Final_SuperRes_{t_size[0]}x{t_size[1]}_C{clarity_strength}.png"
+    file_name_tag = "Lanczos4_Super_Resolution" if "Lanczos" in upscale_method else "Bicubic_Interpolation"
+    file_name = f"{file_name_tag}_{t_size[0]}x{t_size[1]}_C{clarity_strength}.png"
 
     st.download_button(
         label=f"⬇ Download Perfected PNG (Resolution: {t_size[0]}x{t_size[1]})",
