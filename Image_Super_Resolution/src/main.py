@@ -89,13 +89,22 @@ def apply_sharpening(image):
     sharpened = cv2.filter2D(image, -1, kernel)
     return sharpened
 
-def clarify_ai_image(image):
+def clarify_image(image, strength=1.5):
     """
-    Applies Unsharp Masking to naturally clear up blurriness inherent in ESPCN subpixel inferences
-    without generating harsh artifact rings like standard sharpening matrices.
+    Applies an infinitely scaled Unsharp Masking to naturally strip away optical blurriness 
+    without generating harsh geometric artifact rings. Customizable via 'strength'.
+    Formula: original + (original - blur) * strength
     """
-    blurred = cv2.GaussianBlur(image, (0, 0), 2.5)
-    clarified = cv2.addWeighted(image, 1.6, blurred, -0.6, 0)
+    if strength <= 0:
+        return image
+        
+    # Drastically increased the blur radius (sigma=15.0) to successfully target massive 
+    # structural blur gradients across heavily upscaled HD images instead of microscopic pixel noise!
+    blurred = cv2.GaussianBlur(image, (0, 0), 10.0)
+    
+    weight1 = 1.0 + strength
+    weight2 = -strength
+    clarified = cv2.addWeighted(image, weight1, blurred, weight2, 0)
     return clarified
 
 def compute_metrics(original, processed):
@@ -251,8 +260,8 @@ def main():
     nearest_out = upscale_nearest(low_res_img, target_size)
     ai_out = upscale_ai(low_res_img, target_size)
     
-    # Optional unblur smoothing for the AI network natively natively implemented here
-    ai_out = clarify_ai_image(ai_out)
+    # Optional unblur smoothing natively implemented here for the AI variant
+    ai_out = clarify_image(ai_out, strength=1.5)
     
     sharpened_bicubic_out = apply_sharpening(bicubic_out)
     

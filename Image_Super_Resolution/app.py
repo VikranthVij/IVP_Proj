@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(__file__))
 from src.main import (
     upscale_bicubic, 
     upscale_ai, 
-    clarify_ai_image,
+    clarify_image,
     apply_sharpening
 )
 
@@ -36,7 +36,6 @@ upscale_method = st.sidebar.radio(
     ["Deep Learning AI (ESPCN)", "Mathematical Bicubic"]
 )
 
-# Updated slider parameters natively requested
 num_cols = st.sidebar.columns([1])
 scale_factor = st.sidebar.slider(
     "Select Upscaling Multiplier (Zoom Factor):", 
@@ -45,10 +44,11 @@ scale_factor = st.sidebar.slider(
 )
 
 st.sidebar.markdown("---")
-apply_sharpening_bool = st.sidebar.checkbox(
-    "✨ Post-Process: Apply Output Clarification Filter", 
-    value=True,
-    help="This applies Unsharp Masking/Laplacian algorithms dynamically to unblur upscale outputs automatically."
+st.sidebar.subheader("✨ Post-Process Clarity")
+clarity_strength = st.sidebar.slider(
+    "Unblur Intensity (Edge Sharpness)", 
+    min_value=0.0, max_value=5.0, value=1.5, step=0.1,
+    help="Higher values forcefully strip away blurriness and reconstruct sharp textures in real-time. Set to 0 to disable."
 )
 
 st.sidebar.markdown("---")
@@ -67,7 +67,8 @@ else:
 # Upload Image Area
 # -----------------------------
 st.subheader("1. 📸 Upload Low Resolution Image")
-uploaded_file = st.file_uploader("", type=["jpg", "png", "jpeg"])
+# Fixing the empty label warning
+uploaded_file = st.file_uploader("Select Image File (.png, .jpg)", type=["jpg", "png", "jpeg"])
 
 if uploaded_file is not None:
     # Safely digest uploaded bytes back into fully-fledged openCV representations
@@ -78,81 +79,100 @@ if uploaded_file is not None:
     height, width = low_res.shape[:2]
     target_size = (int(width * scale_factor), int(height * scale_factor))
 
-    # Info banner letting user organically gauge exactly what sizes are outputted
     st.info(f"Target Output Dimension rendering out to: **{target_size[0]} x {target_size[1]}** pixels")
 
-    if st.button("🚀 Upscale Image Now", use_container_width=True, type="primary"):
-        with st.spinner(f"Super-Res engine crunching {target_size[0]}x{target_size[1]} frame sizes natively inline... Please wait."):
+    if st.button("🚀 Upscale Base Image Now", use_container_width=True, type="primary"):
+        with st.spinner(f"Super-Res engine crunching {target_size[0]}x{target_size[1]} frame sizes natively inline..."):
             
             # --- De-Blockify Processing ---
             if apply_pixel_art and block_size > 1:
                 tiny_w = max(1, width // block_size)
                 tiny_h = max(1, height // block_size)
                 work_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
-                st.info(f"Analyzed structural resolution. Image block architecture gracefully minimized to: **{tiny_w}x{tiny_h} px**.")
+                st.info(f"Analyzed structural resolution. Image block architecture minimized to: **{tiny_w}x{tiny_h} px**.")
             else:
                 work_img = low_res
 
-            # -----------------------------
-            # Interlinked Core Algorithm Handling
-            # -----------------------------
+            # --- Base Architecture Engine ---
             if "Deep Learning" in upscale_method:
-                # Notice we explicitly use work_img which handles both normal sizes and crushed sizes securely
                 output = upscale_ai(work_img, target_size)
-                if apply_sharpening_bool:
-                    # Unsharp mask for explicitly smoothing AI logic
-                    output = clarify_ai_image(output)
             else:
                 output = upscale_bicubic(work_img, target_size)
-                if apply_sharpening_bool:
-                    # Intense standard filter
-                    output = apply_sharpening(output)
-
-            # Reorient identical scaling boundaries solely for side-by-side review in the slider
-            input_resized_for_view = cv2.resize(low_res, target_size, interpolation=cv2.INTER_NEAREST)
-
-            st.success("Successfully computed scaling matrix!")
-            st.divider()
-
-            # -----------------------------
-            # SLIDER UI: Interactive Clean Review
-            # -----------------------------
-            st.subheader("2. 🔍 Interactive Result Inspection (Before vs After)")
+                # Hard filter pre-calculation fallback for massive scaling
+                if clarity_strength > 5.0:
+                   output = apply_sharpening(output) 
             
-            image_comparison(
-                img1=input_resized_for_view,
-                img2=output,
-                label1=f"Original (Nearest {scale_factor}x)",
-                label2=f"{upscale_method} {scale_factor}x Output",
-                width=1000 if target_size[0] > 1000 else target_size[0],  # Bound constraints logically to keep it visually flawless
-                starting_position=50,
-                show_labels=True,
-                make_responsive=True,
-                in_memory=True
-            )
+            st.session_state["base_upscaled"] = output
+            st.session_state["input_resized"] = cv2.resize(low_res, target_size, interpolation=cv2.INTER_NEAREST)
+            st.session_state["target_size"] = target_size
+            st.session_state["upscale_method"] = upscale_method
+            st.success("Successfully computed scaling matrix! You can now freely adjust the Unblur slider.")
 
-            st.divider()
+# -----------------------------
+# LIVE UI VISUALIZATION POOL
+# -----------------------------
+if "base_upscaled" in st.session_state:
+    st.divider()
+    
+    base_out = st.session_state["base_upscaled"]
+    inp_res = st.session_state["input_resized"]
+    t_size = st.session_state["target_size"]
+    u_method = st.session_state["upscale_method"]
 
-            # -----------------------------
-            # Local Download Extraction Button
-            # -----------------------------
-            st.subheader("3. 📥 Download Finalized Export")
-            st.markdown("Your image has been fully upscaled. Acquire the original `.png` asset securely directly onto your machine.")
-            
-            # Format it completely cleanly sequentially binary buffered
-            is_success, buffer = cv2.imencode(".png", cv2.cvtColor(output, cv2.COLOR_RGB2BGR))
-            io_buf = io.BytesIO(buffer)
+    # --- Live Unblur Adjustment Matrix ---
+    if clarity_strength > 0:
+        final_output = clarify_image(base_out, strength=clarity_strength)
+    else:
+        final_output = base_out
 
-            file_name_tag = "ESPCN_Super_Resolution" if "Deep Learning" in upscale_method else "Bicubic_Interpolation"
-            file_name = f"{file_name_tag}_{target_size[0]}x{target_size[1]}.png"
+    st.subheader("2. 🔍 Interactive Result Inspection (Before vs After)")
+    st.markdown("**(Try adjusting the *Unblur Intensity* slider on the left!)**")
+    
+    # -- Protection Against Gigantic Protobuf Crashes (> 4K monitors) --
+    # Streamlit crashes if forced to beam gigabytes of raw matrices straight into HTML iframes.
+    disp_img1 = inp_res
+    disp_img2 = final_output
+    
+    MAX_UI_DIM = 2500
+    if t_size[0] > MAX_UI_DIM or t_size[1] > MAX_UI_DIM:
+        scale_down = min(MAX_UI_DIM / t_size[0], MAX_UI_DIM / t_size[1])
+        safe_ui_size = (int(t_size[0] * scale_down), int(t_size[1] * scale_down))
+        disp_img1 = cv2.resize(inp_res, safe_ui_size, interpolation=cv2.INTER_AREA)
+        disp_img2 = cv2.resize(final_output, safe_ui_size, interpolation=cv2.INTER_AREA)
+        
+        st.warning(f"⚠️ **Preview Scaled Down:** Your upscaled {t_size[0]}x{t_size[1]} image is so phenomenally large that rendering it live would crash the browser! The slider preview below has been constrained to {safe_ui_size[0]}x{safe_ui_size[1]}, but your **Download Button** still exports the full, uncompressed {t_size[0]}x{t_size[1]} masterpiece.")
 
-            st.download_button(
-                label=f"⬇ Download Processed PNG (Resolution: {target_size[0]}x{target_size[1]})",
-                data=io_buf,
-                file_name=file_name,
-                mime="image/png",
-                type="primary",
-                use_container_width=True
-            )
+    # UI Comparison Wrapper
+    image_comparison(
+        img1=disp_img1,
+        img2=disp_img2,
+        label1=f"Original Input",
+        label2=f"{u_method} (Clarity: {clarity_strength})",
+        width=1000 if disp_img2.shape[1] > 1000 else disp_img2.shape[1],
+        starting_position=50,
+        show_labels=True,
+        make_responsive=True,
+        in_memory=True
+    )
+
+    st.divider()
+
+    st.subheader("3. 📥 Download Finalized Export")
+    st.markdown("Your image has been firmly processed. Preserve the super resolved `.png` natively onto your machine.")
+    
+    # Binary buffered writing format
+    is_success, buffer = cv2.imencode(".png", cv2.cvtColor(final_output, cv2.COLOR_RGB2BGR))
+    io_buf = io.BytesIO(buffer)
+    file_name = f"Final_SuperRes_{t_size[0]}x{t_size[1]}_C{clarity_strength}.png"
+
+    st.download_button(
+        label=f"⬇ Download Perfected PNG (Resolution: {t_size[0]}x{t_size[1]})",
+        data=io_buf,
+        file_name=file_name,
+        mime="image/png",
+        type="primary",
+        use_container_width=True
+    )
 else:
-    st.markdown("Waiting for your image...")
+    if uploaded_file is None:
+        st.markdown("Waiting for your image...")
