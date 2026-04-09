@@ -4,246 +4,454 @@ import numpy as np
 import io
 import sys
 import os
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
 
-# Seamless integration: Append path to seamlessly import the backend logic
 sys.path.append(os.path.dirname(__file__))
 from src.main import (
-    upscale_bicubic, 
-    upscale_lanczos, 
-    clarify_image,
+    upscale_bicubic,
+    upscale_lanczos,
+    upscale_nearest,
+    upscale_bilinear,
     apply_sharpening,
     compute_metrics,
-    upscale_nearest
+    enhance_output,
+    iterative_back_projection,
+    _fft_highpass_sharpen,
+    _edge_directed_sharpen,
+    _adaptive_usm,
 )
 import pandas as pd
-
 from streamlit_image_comparison import image_comparison
 
-st.set_page_config(layout="wide", page_title="AI Super Resolution Studio", page_icon="✨")
+# ──────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    layout="wide",
+    page_title="IVP Super-Resolution Studio",
+    page_icon="🔬"
+)
 
-# -----------------------------
-# Stylish Header
-# -----------------------------
-st.title("🌟 AI Super Resolution Studio")
+# ──────────────────────────────────────────────────────────────────────────────
+#  HEADER
+# ──────────────────────────────────────────────────────────────────────────────
+st.title("🔬 IVP Super-Resolution Studio")
 st.markdown(
-    "Easily upload images to neatly upscale them using completely integrated mathematically rigorous IVP logic. "
-    "Switch between standard rigid math (Bicubic) or our advanced structural interpolations (Lanczos-4)!"
+    "**Sharp-First Pipeline** · Lanczos-4 · Iterative Back-Projection · "
+    "FFT High-Pass Sharpening · Edge-Directed Enhancement · Adaptive USM  \n"
+    "Upload any low-resolution image and get a crisp, high-resolution result — "
+    "mathematically, without blur."
 )
 
-# -----------------------------
-# Neat Sidebar Configuration
-# -----------------------------
-st.sidebar.header("🕹️ Primary Operation Mode")
+# ──────────────────────────────────────────────────────────────────────────────
+#  SIDEBAR
+# ──────────────────────────────────────────────────────────────────────────────
+st.sidebar.header("🕹️ Operation Mode")
 operation_mode = st.sidebar.radio(
-    "Select Workflow Type:",
-    ["🚀 Practical Upscale (Directly enlarge a low-res image)", 
-     "🔬 Scientific Evaluation (Destroy & Reconstruct a hi-res image)"],
-    help="Choose whether you want to actually upscale a small picture, or mathematically simulate destruction on a 2K picture to benchmark algorithm accuracy."
+    "Select Workflow:",
+    ["🚀 Practical Upscale", "🔬 Scientific Evaluation"],
+    help=(
+        "Practical: Directly enlarge a low-res image.\n"
+        "Scientific: Simulate LR degradation on a hi-res image and benchmark."
+    )
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙ Processing Algorithms")
+st.sidebar.header("⚙️ Upscaling Engine")
 upscale_method = st.sidebar.radio(
-    "Select Upscaling Engine:", 
-    ["Lanczos-4 Interpolation (Advanced IVP)", "Mathematical Bicubic"]
+    "Algorithm:",
+    ["Lanczos-4  ·  Advanced IVP (Recommended)", "Bicubic  ·  Standard Math"]
 )
 
-num_cols = st.sidebar.columns([1])
 scale_factor = st.sidebar.slider(
-    "Select Upscaling Multiplier (Zoom Factor):", 
-    min_value=2, max_value=8, value=4, step=1,
-    help="Higher numbers mean larger outputs, drastically increasing dimensions."
+    "Upscale Multiplier (×):", min_value=2, max_value=8, value=4, step=1,
+    help="Higher = larger output. Each step quadruples pixel count."
 )
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("✨ Post-Process Clarity")
-clarity_strength = st.sidebar.slider(
-    "Unblur Intensity (Edge Sharpness)", 
-    min_value=0.0, max_value=5.0, value=1.5, step=0.1,
-    help="Higher values forcefully strip away blurriness and reconstruct sharp textures in real-time. Set to 0 to disable."
-)
+st.sidebar.header("🎛️ IVP Pipeline Controls")
+
+with st.sidebar.expander("🔁 Iterative Back-Projection", expanded=True):
+    ibp_iters = st.slider(
+        "IBP Iterations:", min_value=0, max_value=12, value=6,
+        help=(
+            "Corrects HR estimate by projecting LR residual errors back. "
+            "More iterations = more faithful reconstruction. 0 = disabled."
+        )
+    )
+
+with st.sidebar.expander("📡 FFT High-Pass Sharpening", expanded=True):
+    fft_boost = st.slider(
+        "FFT Detail Boost:", min_value=0.0, max_value=1.0, value=0.40, step=0.05,
+        help="Amplifies high-frequency components (edges, fine textures) in DFT space."
+    )
+
+with st.sidebar.expander("🗡️ Edge-Directed Sharpening", expanded=True):
+    edge_strength = st.slider(
+        "Edge Enhancement Strength:", min_value=0.0, max_value=1.0, value=0.55, step=0.05,
+        help=(
+            "Scharr-gradient-gated sharpening. "
+            "Only detected edges are sharpened — flat regions stay clean."
+        )
+    )
+
+with st.sidebar.expander("🌊 Adaptive USM", expanded=False):
+    usm_sigma = st.slider(
+        "USM Sigma:", min_value=0.3, max_value=2.0, value=0.9, step=0.1,
+        help="Gaussian kernel size for detail extraction. Smaller = sharper micro-detail."
+    )
 
 st.sidebar.markdown("---")
 apply_pixel_art = st.sidebar.checkbox(
-    "👾 Enable Pixel-Art De-blockify Mode", 
+    "👾 Pixel-Art De-blockify Mode",
     value=False,
-    help="If your image is made of huge bloated pixel blocks, this destroys them cleanly before intelligent smoothing."
+    help="Destroys artificial block artifacts cleanly before upscaling."
 )
-
 if apply_pixel_art:
-    block_size = st.sidebar.number_input("Estimated Block Width (Pixels):", min_value=1, max_value=100, value=16)
+    block_size = st.sidebar.number_input(
+        "Estimated Block Width (px):", min_value=1, max_value=100, value=16
+    )
 else:
     block_size = 1
 
-# -----------------------------
-# Upload Image Area
-# -----------------------------
-st.subheader("1. 📸 Upload Low Resolution Image")
-# Fixing the empty label warning
-uploaded_file = st.file_uploader("Select Image File (.png, .jpg)", type=["jpg", "png", "jpeg"])
+# ──────────────────────────────────────────────────────────────────────────────
+#  IMAGE UPLOAD
+# ──────────────────────────────────────────────────────────────────────────────
+st.subheader("1. 📸 Upload Image")
+uploaded_file = st.file_uploader(
+    "Select Image File (.png, .jpg, .jpeg, .bmp, .tiff)",
+    type=["jpg", "png", "jpeg", "bmp", "tiff"]
+)
 
 if uploaded_file is not None:
-    # Safely digest uploaded bytes back into fully-fledged openCV representations
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    low_res = cv2.imdecode(file_bytes, 1)
+    low_res = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     low_res = cv2.cvtColor(low_res, cv2.COLOR_BGR2RGB)
-    
+
     height, width = low_res.shape[:2]
-    
-    if "Practical Upscale" in operation_mode:
+
+    if "Practical" in operation_mode:
         t_size = (int(width * scale_factor), int(height * scale_factor))
-        st.info(f"Target Output Dimension rendering out to: **{t_size[0]} x {t_size[1]}** pixels")
+        st.info(
+            f"Input: **{width} × {height}** → Output target: **{t_size[0]} × {t_size[1]}** pixels "
+            f"({scale_factor}× magnification)"
+        )
     else:
-        # Scientific Evaluation
         t_size = (width, height)
         eval_tiny_w = max(1, width // scale_factor)
         eval_tiny_h = max(1, height // scale_factor)
-        st.info(f"Evaluation Parameters: Destroying Original Image down to **{eval_tiny_w}x{eval_tiny_h}**, then meticulously mathematically reconstructing it back up to {width}x{height} to measure structural retention.")
+        st.info(
+            f"Scientific mode: Simulating degradation to **{eval_tiny_w}×{eval_tiny_h}** "
+            f"then reconstructing to **{width}×{height}** for benchmarking."
+        )
 
-    if st.button("🚀 Execute Processing Engine", use_container_width=True, type="primary"):
-        with st.spinner(f"Super-Res engine crunching matrix frames natively inline..."):
-            
-            if "Practical Upscale" in operation_mode:
-                # --- Practical Upscale Mode ---
-                # --- De-Blockify Processing ---
+    # Pipeline summary callout
+    use_ibp = ibp_iters > 0
+    with st.expander("🔍 Active Pipeline Summary", expanded=False):
+        st.markdown(f"""
+| Stage | Module | Status |
+|---|---|---|
+| Upscaling Kernel | {"Lanczos-4 (sinc/8×8 kernel)" if "Lanczos" in upscale_method else "Bicubic (4×4 kernel)"} | ✅ Always Active |
+| Stage 1 · IBP | Iterative Back-Projection | {"✅ " + str(ibp_iters) + " iterations" if use_ibp else "⚪ Disabled (0 iterations)"} |
+| Stage 2 · FFT | Frequency-Domain High-Pass | {"✅ Boost = " + str(fft_boost) if fft_boost > 0 else "⚪ Disabled"} |
+| Stage 3 · Edge | Anisotropic Edge Sharpening | {"✅ Strength = " + str(edge_strength) if edge_strength > 0 else "⚪ Disabled"} |
+| Stage 4 · USM | Adaptive Variance USM | {"✅ σ = " + str(usm_sigma)} |
+| Pixel-Art Mode | De-blockify Pre-processing | {"✅ Block = " + str(block_size) + "px" if apply_pixel_art else "⚪ Disabled"} |
+        """)
+
+    if st.button("🚀 Run Sharp-First IVP Pipeline", use_container_width=True, type="primary"):
+        with st.spinner("Crunching pixels through the IVP pipeline..."):
+
+            if "Practical" in operation_mode:
+                # ── De-blockify pre-pass ──
                 if apply_pixel_art and block_size > 1:
                     tiny_w = max(1, width // block_size)
                     tiny_h = max(1, height // block_size)
                     work_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
-                    st.info(f"Analyzed structural resolution. Image block architecture minimized to: **{tiny_w}x{tiny_h} px**.")
+                    st.info(f"De-blockify: crushed to structural base **{tiny_w}×{tiny_h}** px")
                 else:
                     work_img = low_res
 
-                # --- Base Architecture Engine ---
+                # ── Primary upscale ──
                 if "Lanczos" in upscale_method:
-                    output = upscale_lanczos(work_img, t_size)
+                    base_up = cv2.resize(work_img, t_size, interpolation=cv2.INTER_LANCZOS4)
                 else:
-                    output = upscale_bicubic(work_img, t_size)
-                    if clarity_strength > 5.0:
-                       output = apply_sharpening(output) 
-                       
-                st.session_state["input_preview"] = cv2.resize(low_res, t_size, interpolation=cv2.INTER_NEAREST)
+                    base_up = cv2.resize(work_img, t_size, interpolation=cv2.INTER_CUBIC)
+
+                # ── Sharp-First Enhancement ──
+                output = enhance_output(
+                    base_up,
+                    lr_source=work_img if use_ibp else None,
+                    ibp_iters=ibp_iters,
+                    fft_boost=fft_boost,
+                    usm_sigma=usm_sigma,
+                    edge_strength=edge_strength,
+                )
+
+                st.session_state["input_preview"] = cv2.resize(
+                    low_res, t_size, interpolation=cv2.INTER_NEAREST
+                )
                 st.session_state["eval_metrics"] = None
-                
+
             else:
-                # --- Scientific Evaluation Mode ---
-                # "low_res" is completely High-Res ground truth. Destroy it down!
-                destroyed_img = cv2.resize(low_res, (eval_tiny_w, eval_tiny_h), interpolation=cv2.INTER_AREA)
-                
+                # ── Scientific Evaluation ──
+                destroyed_img = cv2.resize(
+                    low_res, (eval_tiny_w, eval_tiny_h), interpolation=cv2.INTER_AREA
+                )
+
                 if "Lanczos" in upscale_method:
-                    output = upscale_lanczos(destroyed_img, t_size)
+                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LANCZOS4)
                 else:
-                    output = upscale_bicubic(destroyed_img, t_size)
-                    if clarity_strength > 5.0:
-                       output = apply_sharpening(output) 
-                
-                # --- Graphical Analytics Computation ---
+                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_CUBIC)
+
+                output = enhance_output(
+                    base_up,
+                    lr_source=destroyed_img if use_ibp else None,
+                    ibp_iters=ibp_iters,
+                    fft_boost=fft_boost,
+                    usm_sigma=usm_sigma,
+                    edge_strength=edge_strength,
+                )
+
+                # ── Compute all 4 for benchmarks ──
                 n_out = upscale_nearest(destroyed_img, t_size)
-                b_out = upscale_bicubic(destroyed_img, t_size)
-                l_out = upscale_lanczos(destroyed_img, t_size)
-                if clarity_strength > 0:
-                    l_out = clarify_image(l_out, strength=clarity_strength)
+                b_out = upscale_bilinear(destroyed_img, t_size)
+                bc_out = upscale_bicubic(destroyed_img, t_size)
+                lz_out = upscale_lanczos(destroyed_img, t_size)
 
                 st.session_state["eval_metrics"] = {
-                    "Nearest Neighbor (Raw baseline)": compute_metrics(low_res, n_out),
-                    "Generic Bicubic math": compute_metrics(low_res, b_out),
-                    "Advanced IVP (Lanczos)": compute_metrics(low_res, l_out)
+                    "Nearest Neighbor": compute_metrics(low_res, n_out),
+                    "Bilinear":         compute_metrics(low_res, b_out),
+                    "Bicubic + IVP":    compute_metrics(low_res, bc_out),
+                    "Lanczos-4 + IVP":  compute_metrics(low_res, lz_out),
                 }
-                
-                st.session_state["input_preview"] = low_res  # Visual Slider statically compares Ground Truth vs output!
+                st.session_state["input_preview"] = low_res  # slider: ground truth vs output
 
             st.session_state["base_upscaled"] = output
-            st.session_state["target_size"] = t_size
+            st.session_state["target_size"]   = t_size
             st.session_state["upscale_method"] = upscale_method
-            st.success("Successfully computed output matrix! You can now freely adjust the Unblur slider below.")
+            st.session_state["low_res_orig"]   = low_res
+            st.success("✅ Pipeline complete! Scroll down to inspect your crisp output.")
 
-# -----------------------------
-# LIVE UI VISUALIZATION POOL
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+#  RESULTS PANEL
+# ──────────────────────────────────────────────────────────────────────────────
 if "base_upscaled" in st.session_state:
     st.divider()
-    
-    base_out = st.session_state["base_upscaled"]
-    inp_preview = st.session_state["input_preview"]
-    t_size = st.session_state["target_size"]
-    u_method = st.session_state["upscale_method"]
 
-    # --- Live Unblur Adjustment Matrix ---
-    if clarity_strength > 0:
-        final_output = clarify_image(base_out, strength=clarity_strength)
-    else:
-        final_output = base_out
+    final_output = st.session_state["base_upscaled"]
+    inp_preview  = st.session_state["input_preview"]
+    t_size       = st.session_state["target_size"]
+    u_method     = st.session_state["upscale_method"]
+    low_res_orig = st.session_state.get("low_res_orig", inp_preview)
 
-    st.subheader("2. 🔍 Interactive Result Inspection (Before vs After)")
-    st.markdown("**(Try adjusting the *Unblur Intensity* slider on the left!)**")
-    
-    # -- Protection Against Gigantic Protobuf Crashes (> 4K monitors) --
-    # Streamlit crashes if forced to beam gigabytes of raw matrices straight into HTML iframes.
-    disp_img1 = inp_preview
-    disp_img2 = final_output
-    
+    # ── Before / After slider ──────────────────────────────────────────────
+    st.subheader("2. 🔍 Before vs After (Drag to Compare)")
+
+    disp1, disp2 = inp_preview, final_output
     MAX_UI_DIM = 2500
     if t_size[0] > MAX_UI_DIM or t_size[1] > MAX_UI_DIM:
-        scale_down = min(MAX_UI_DIM / t_size[0], MAX_UI_DIM / t_size[1])
-        safe_ui_size = (int(t_size[0] * scale_down), int(t_size[1] * scale_down))
-        disp_img1 = cv2.resize(inp_preview, safe_ui_size, interpolation=cv2.INTER_AREA)
-        disp_img2 = cv2.resize(final_output, safe_ui_size, interpolation=cv2.INTER_AREA)
-        
-        st.warning(f"⚠️ **Preview Scaled Down:** Your upscaled {t_size[0]}x{t_size[1]} image is so phenomenally large that rendering it live would crash the browser! The slider preview below has been constrained to {safe_ui_size[0]}x{safe_ui_size[1]}, but your **Download Button** still exports the full, uncompressed {t_size[0]}x{t_size[1]} masterpiece.")
+        sd = min(MAX_UI_DIM / t_size[0], MAX_UI_DIM / t_size[1])
+        safe_sz = (int(t_size[0] * sd), int(t_size[1] * sd))
+        disp1 = cv2.resize(inp_preview,   safe_sz, interpolation=cv2.INTER_AREA)
+        disp2 = cv2.resize(final_output,  safe_sz, interpolation=cv2.INTER_AREA)
+        st.warning(
+            f"⚠️ Preview scaled to {safe_sz[0]}×{safe_sz[1]} for browser safety. "
+            f"Download still exports full **{t_size[0]}×{t_size[1]}** image."
+        )
 
-    # UI Comparison Wrapper
     image_comparison(
-        img1=disp_img1,
-        img2=disp_img2,
-        label1=f"Original Input",
-        label2=f"{u_method} (Clarity: {clarity_strength})",
-        width=1000 if disp_img2.shape[1] > 1000 else disp_img2.shape[1],
+        img1=disp1, img2=disp2,
+        label1="Input",
+        label2=f"{u_method.split('·')[0].strip()} Output",
+        width=min(1000, disp2.shape[1]),
         starting_position=50,
         show_labels=True,
         make_responsive=True,
-        in_memory=True
+        in_memory=True,
     )
 
-    # --- Live Metric Graph Viewing ---
-    if "eval_metrics" in st.session_state and st.session_state["eval_metrics"] is not None:
+    # ── Scientific Benchmarks ──────────────────────────────────────────────
+    if st.session_state.get("eval_metrics") is not None:
         st.divider()
         st.subheader("📈 Scientific Accuracy Benchmarks")
-        st.markdown("Because we enabled analytics, our system successfully simulated extreme data loss under the hood by physically destroying the image data, then forcefully reconstructing it using the 3 absolute core methods.")
-        
+        st.markdown(
+            "Each algorithm reconstructed the degraded image back to original resolution. "
+            "Scores measure how closely the output matches the **pristine ground truth**."
+        )
         metrics = st.session_state["eval_metrics"]
+        method_labels = list(metrics.keys())
+
+        # -- PSNR row --
+        st.markdown("### 1. Peak Signal-to-Noise Ratio (PSNR) — Higher is Better")
+        st.caption("Measures data fidelity and noise. Higher dB = closer to the original.")
+        psnr_cols = st.columns(len(method_labels))
+        for col, label in zip(psnr_cols, method_labels):
+            col.metric(label, f"{metrics[label]['PSNR']:.2f} dB")
+
+        # -- SSIM row --
+        st.markdown("### 2. Structural Similarity Index (SSIM) — Closer to 1.0 is Better")
+        st.caption("Measures edge and structural preservation. 1.0 = perfect lossless match.")
+        ssim_cols = st.columns(len(method_labels))
+        for col, label in zip(ssim_cols, method_labels):
+            col.metric(label, f"{metrics[label]['SSIM']:.4f}")
+
+        # -- Charts --
+        st.markdown("---")
+        st.markdown("#### Visual Distribution")
         df = pd.DataFrame({
-            "Algorithmic Approach": list(metrics.keys()),
-            "PSNR Accuracy Score (dB)": [m["PSNR"] for m in metrics.values()],
-            "SSIM Structural Score": [m["SSIM"] for m in metrics.values()]
-        }).set_index("Algorithmic Approach")
-        
+            "Algorithm": method_labels,
+            "PSNR (dB)": [metrics[m]["PSNR"] for m in method_labels],
+            "SSIM": [metrics[m]["SSIM"] for m in method_labels],
+        }).set_index("Algorithm")
+
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**Peak Signal-to-Noise Ratio** *(Measures how little noise/corruption occurred. Taller bar = exceptionally cleaner image)*")
-            st.bar_chart(df[["PSNR Accuracy Score (dB)"]], color="#B48B36")
+            st.bar_chart(df[["PSNR (dB)"]], color="#B48B36")
         with c2:
-            st.markdown("**Structural Similarity Index** *(Measures mathematically pure edge retention. Closer to 1.0 = flawlessly crisp)*")
-            st.bar_chart(df[["SSIM Structural Score"]], color="#FFFFFF")
+            st.bar_chart(df[["SSIM"]], color="#6EA8FF")
+
+    # ── Visual Analytics Dashboard ─────────────────────────────────────────
+    st.divider()
+    st.subheader("📊 Visual Analytics Dashboard")
+    st.markdown(
+        "Deep-dive into what the pipeline actually changed — pixel distributions, "
+        "sharpness metrics, per-channel statistics, and resolution gains."
+    )
+
+    # 1. RGB Histograms
+    st.markdown("### 🎨 Pixel Intensity Histogram (Input vs Output)")
+    st.caption(
+        "A wider, well-spread histogram → richer dynamic range → more detail. "
+        "Notice how the IVP pipeline redistributes pixel energy toward the tails."
+    )
+    fig_hist, axes_h = plt.subplots(1, 2, figsize=(14, 4.5))
+    fig_hist.patch.set_facecolor('#0E1117')
+    colors = ['#FF6B6B', '#51CF66', '#339AF0']
+    ch_names = ['Red', 'Green', 'Blue']
+
+    for ax, img, title in [
+        (axes_h[0], low_res_orig, 'Input Image'),
+        (axes_h[1], final_output, 'IVP Output (Sharp-First)'),
+    ]:
+        small = cv2.resize(img, (min(img.shape[1], 512), min(img.shape[0], 512)),
+                           interpolation=cv2.INTER_AREA)
+        for c_idx in range(3):
+            hv = cv2.calcHist([small], [c_idx], None, [256], [0, 256]).flatten()
+            ax.fill_between(range(256), hv, alpha=0.3, color=colors[c_idx], label=ch_names[c_idx])
+            ax.plot(range(256), hv, color=colors[c_idx], linewidth=0.9)
+        ax.set_title(title, color='white', fontsize=13, fontweight='bold')
+        ax.set_facecolor('#1A1D23')
+        ax.tick_params(colors='white')
+        ax.legend(fontsize=9, facecolor='#1A1D23', edgecolor='#333', labelcolor='white')
+        ax.set_xlim(0, 255)
+        ax.set_xlabel('Pixel Intensity', color='#888')
+        ax.set_ylabel('Frequency', color='#888')
+        for s in ax.spines.values():
+            s.set_color('#333')
+
+    fig_hist.tight_layout(pad=2.0)
+    st.pyplot(fig_hist)
+    plt.close(fig_hist)
+
+    # 2. Image Quality Statistics
+    st.markdown("### 📐 Image Quality Statistics")
+    st.caption("Key sharpness and contrast indicators. Sharpness = Laplacian variance (higher = sharper).")
+
+    def compute_image_stats(img):
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        return {
+            "Mean Brightness":         float(np.mean(gray)),
+            "Std Dev (Contrast)":      float(np.std(gray)),
+            "Sharpness (Laplacian ↑)": float(lap_var),
+            "Dynamic Range":           float(np.max(gray) - np.min(gray)),
+        }
+
+    s_in  = compute_image_stats(low_res_orig)
+    s_out = compute_image_stats(final_output)
+    stat_cols = st.columns(4)
+    for i, label in enumerate(s_in.keys()):
+        delta = s_out[label] - s_in[label]
+        stat_cols[i].metric(
+            label=label,
+            value=f"{s_out[label]:.1f}",
+            delta=f"{delta:+.1f}",
+            help=f"Input: {s_in[label]:.1f}  →  Output: {s_out[label]:.1f}"
+        )
+
+    # 3. Per-Channel Analysis
+    st.markdown("### 🔬 Per-Channel Mean & Std Dev")
+    st.caption("R/G/B channel statistics: mean intensity and standard deviation for input and output.")
+
+    ch_data = []
+    for c_idx, c_name in enumerate(ch_names):
+        ch_data.append({
+            "Channel":      c_name,
+            "Input Mean":   float(np.mean(low_res_orig[:, :, c_idx])),
+            "Output Mean":  float(np.mean(final_output[:, :, c_idx])),
+            "Input StdDev": float(np.std(low_res_orig[:, :, c_idx])),
+            "Output StdDev":float(np.std(final_output[:, :, c_idx])),
+        })
+    df_ch = pd.DataFrame(ch_data).set_index("Channel")
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.markdown("**Channel Mean Intensity**")
+        st.bar_chart(df_ch[["Input Mean", "Output Mean"]], color=["#FF6B6B", "#339AF0"])
+    with cc2:
+        st.markdown("**Channel Std Deviation**")
+        st.bar_chart(df_ch[["Input StdDev", "Output StdDev"]], color=["#FF6B6B", "#339AF0"])
+
+    # 4. Sharpness Comparison Bar
+    st.markdown("### 🗡️ Sharpness Gain Analysis")
+    st.caption(
+        "Laplacian variance is the standard IVP sharpness metric. "
+        "Higher = more high-frequency edge content = sharper image."
+    )
+    sharp_df = pd.DataFrame({
+        "Stage": ["Input", "IVP Output"],
+        "Sharpness (Laplacian Var)": [s_in["Sharpness (Laplacian ↑)"], s_out["Sharpness (Laplacian ↑)"]],
+    }).set_index("Stage")
+    st.bar_chart(sharp_df, color="#51CF66")
+    gain_pct = ((s_out["Sharpness (Laplacian ↑)"] / max(s_in["Sharpness (Laplacian ↑)"], 1e-6)) - 1) * 100
+    st.metric("Sharpness Multiplier", f"{s_out['Sharpness (Laplacian ↑)']:.0f}", delta=f"{gain_pct:+.1f}%")
+
+    # 5. Resolution Info
+    st.markdown("### 📏 Resolution Upgrade")
+    in_h, in_w = low_res_orig.shape[:2]
+    out_h, out_w = final_output.shape[:2]
+    rc1, rc2, rc3 = st.columns(3)
+    rc1.metric("Input Resolution",  f"{in_w} × {in_h}",   help="Width × Height of the uploaded image")
+    rc2.metric("Output Resolution", f"{out_w} × {out_h}",  help="Width × Height of the IVP output")
+    rc3.metric("Pixel Count ×",     f"{(out_w * out_h) / max(1, in_w * in_h):.1f}×",
+               help="How many times more pixels the output contains")
 
     st.divider()
 
-    st.subheader("3. 📥 Download Finalized Export")
-    st.markdown("Your image has been firmly processed. Preserve the super resolved `.png` natively onto your machine.")
-    
-    # Binary buffered writing
+    # ── Download ────────────────────────────────────────────────────────────
+    st.subheader("3. 📥 Download Your Sharp Output")
+    st.markdown(
+        "The full-resolution, processed PNG is ready. "
+        "This is the complete, lossless export at the target resolution."
+    )
+
     is_success, buffer = cv2.imencode(".png", cv2.cvtColor(final_output, cv2.COLOR_RGB2BGR))
     io_buf = io.BytesIO(buffer)
-    file_name_tag = "Lanczos4_Super_Resolution" if "Lanczos" in upscale_method else "Bicubic_Interpolation"
-    file_name = f"{file_name_tag}_{t_size[0]}x{t_size[1]}_C{clarity_strength}.png"
+    tag = "Lanczos4_IVP" if "Lanczos" in u_method else "Bicubic_IVP"
+    file_name = f"{tag}_Sharp_{t_size[0]}x{t_size[1]}.png"
 
     st.download_button(
-        label=f"⬇ Download Perfected PNG (Resolution: {t_size[0]}x{t_size[1]})",
+        label=f"⬇ Download Sharp PNG  ({t_size[0]} × {t_size[1]} px)",
         data=io_buf,
         file_name=file_name,
         mime="image/png",
         type="primary",
-        use_container_width=True
+        use_container_width=True,
     )
+
 else:
     if uploaded_file is None:
-        st.markdown("Waiting for your image...")
+        st.markdown(
+            "> 📂 Upload an image above and hit **Run Sharp-First IVP Pipeline** to begin."
+        )
