@@ -14,13 +14,8 @@ from src.main import (
     upscale_lanczos,
     upscale_nearest,
     upscale_bilinear,
-    apply_sharpening,
     compute_metrics,
     enhance_output,
-    iterative_back_projection,
-    _fft_highpass_sharpen,
-    _edge_directed_sharpen,
-    _adaptive_usm,
 )
 import pandas as pd
 from streamlit_image_comparison import image_comparison
@@ -37,10 +32,8 @@ st.set_page_config(
 # ──────────────────────────────────────────────────────────────────────────────
 st.title("🔬 IVP Super-Resolution Studio")
 st.markdown(
-    "**Sharp-First Pipeline** · Lanczos-4 · Iterative Back-Projection · "
-    "FFT High-Pass Sharpening · Edge-Directed Enhancement · Adaptive USM  \n"
-    "Upload any low-resolution image and get a crisp, high-resolution result — "
-    "mathematically, without blur."
+    "**Focused Sharp-First Pipeline** · Professional IVP Restoration  \n"
+    "Upload any low-resolution image and get a crisp, high-resolution result without the clutter."
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -69,41 +62,9 @@ scale_factor = st.sidebar.slider(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎛️ IVP Pipeline Controls")
-
-with st.sidebar.expander("🔁 Iterative Back-Projection", expanded=True):
-    ibp_iters = st.slider(
-        "IBP Iterations:", min_value=0, max_value=12, value=6,
-        help=(
-            "Corrects HR estimate by projecting LR residual errors back. "
-            "More iterations = more faithful reconstruction. 0 = disabled."
-        )
-    )
-
-with st.sidebar.expander("📡 FFT High-Pass Sharpening", expanded=True):
-    fft_boost = st.slider(
-        "FFT Detail Boost:", min_value=0.0, max_value=1.0, value=0.40, step=0.05,
-        help="Amplifies high-frequency components (edges, fine textures) in DFT space."
-    )
-
-with st.sidebar.expander("🗡️ Edge-Directed Sharpening", expanded=True):
-    edge_strength = st.slider(
-        "Edge Enhancement Strength:", min_value=0.0, max_value=1.0, value=0.55, step=0.05,
-        help=(
-            "Scharr-gradient-gated sharpening. "
-            "Only detected edges are sharpened — flat regions stay clean."
-        )
-    )
-
-with st.sidebar.expander("🌊 Adaptive USM", expanded=False):
-    usm_sigma = st.slider(
-        "USM Sigma:", min_value=0.3, max_value=2.0, value=0.9, step=0.1,
-        help="Gaussian kernel size for detail extraction. Smaller = sharper micro-detail."
-    )
-
-st.sidebar.markdown("---")
+st.sidebar.header("👾 Artifact Correction")
 apply_pixel_art = st.sidebar.checkbox(
-    "👾 Pixel-Art De-blockify Mode",
+    "Enable De-blockify Mode",
     value=False,
     help="Destroys artificial block artifacts cleanly before upscaling."
 )
@@ -113,6 +74,12 @@ if apply_pixel_art:
     )
 else:
     block_size = 1
+
+# Hardcoded Sweet-Spot Defaults (Simplified UI)
+DEFAULT_IBP_ITERS = 6
+DEFAULT_FFT_BOOST = 0.40
+DEFAULT_EDGE_STRENGTH = 0.55
+DEFAULT_USM_SIGMA = 0.9
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  IMAGE UPLOAD
@@ -145,20 +112,6 @@ if uploaded_file is not None:
             f"then reconstructing to **{width}×{height}** for benchmarking."
         )
 
-    # Pipeline summary callout
-    use_ibp = ibp_iters > 0
-    with st.expander("🔍 Active Pipeline Summary", expanded=False):
-        st.markdown(f"""
-| Stage | Module | Status |
-|---|---|---|
-| Upscaling Kernel | {"Lanczos-4 (sinc/8×8 kernel)" if "Lanczos" in upscale_method else "Bicubic (4×4 kernel)"} | ✅ Always Active |
-| Stage 1 · IBP | Iterative Back-Projection | {"✅ " + str(ibp_iters) + " iterations" if use_ibp else "⚪ Disabled (0 iterations)"} |
-| Stage 2 · FFT | Frequency-Domain High-Pass | {"✅ Boost = " + str(fft_boost) if fft_boost > 0 else "⚪ Disabled"} |
-| Stage 3 · Edge | Anisotropic Edge Sharpening | {"✅ Strength = " + str(edge_strength) if edge_strength > 0 else "⚪ Disabled"} |
-| Stage 4 · USM | Adaptive Variance USM | {"✅ σ = " + str(usm_sigma)} |
-| Pixel-Art Mode | De-blockify Pre-processing | {"✅ Block = " + str(block_size) + "px" if apply_pixel_art else "⚪ Disabled"} |
-        """)
-
     if st.button("🚀 Run Sharp-First IVP Pipeline", use_container_width=True, type="primary"):
         with st.spinner("Crunching pixels through the IVP pipeline..."):
 
@@ -181,11 +134,11 @@ if uploaded_file is not None:
                 # ── Sharp-First Enhancement ──
                 output = enhance_output(
                     base_up,
-                    lr_source=work_img if use_ibp else None,
-                    ibp_iters=ibp_iters,
-                    fft_boost=fft_boost,
-                    usm_sigma=usm_sigma,
-                    edge_strength=edge_strength,
+                    lr_source=work_img,
+                    ibp_iters=DEFAULT_IBP_ITERS,
+                    fft_boost=DEFAULT_FFT_BOOST,
+                    usm_sigma=DEFAULT_USM_SIGMA,
+                    edge_strength=DEFAULT_EDGE_STRENGTH,
                 )
 
                 st.session_state["input_preview"] = cv2.resize(
@@ -206,18 +159,18 @@ if uploaded_file is not None:
 
                 output = enhance_output(
                     base_up,
-                    lr_source=destroyed_img if use_ibp else None,
-                    ibp_iters=ibp_iters,
-                    fft_boost=fft_boost,
-                    usm_sigma=usm_sigma,
-                    edge_strength=edge_strength,
+                    lr_source=destroyed_img,
+                    ibp_iters=DEFAULT_IBP_ITERS,
+                    fft_boost=DEFAULT_FFT_BOOST,
+                    usm_sigma=DEFAULT_USM_SIGMA,
+                    edge_strength=DEFAULT_EDGE_STRENGTH,
                 )
 
                 # ── Compute all 4 for benchmarks ──
-                n_out = upscale_nearest(destroyed_img, t_size)
-                b_out = upscale_bilinear(destroyed_img, t_size)
-                bc_out = upscale_bicubic(destroyed_img, t_size)
-                lz_out = upscale_lanczos(destroyed_img, t_size)
+                n_out = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_NEAREST)
+                b_out = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LINEAR)
+                bc_out = upscale_bicubic(destroyed_img, t_size, apply_enhancement=True)
+                lz_out = upscale_lanczos(destroyed_img, t_size, apply_enhancement=True)
 
                 st.session_state["eval_metrics"] = {
                     "Nearest Neighbor": compute_metrics(low_res, n_out),
