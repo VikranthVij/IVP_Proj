@@ -51,15 +51,7 @@ st.markdown(
 # ──────────────────────────────────────────────────────────────────────────────
 #  SIDEBAR
 # ──────────────────────────────────────────────────────────────────────────────
-st.sidebar.header("🕹️ Operation Mode")
-operation_mode = st.sidebar.radio(
-    "Select Workflow:",
-    ["🚀 Practical Upscale", "🔬 Scientific Evaluation"],
-    help=(
-        "Practical: Directly enlarge a low-res image.\n"
-        "Scientific: Simulate LR degradation on a hi-res image and benchmark."
-    )
-)
+
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Upscaling Engine")
@@ -113,138 +105,65 @@ if uploaded_file is not None:
 
     height, width = low_res.shape[:2]
 
-    if "Practical" in operation_mode:
-        t_size = (int(width * scale_factor), int(height * scale_factor))
-        st.info(
-            f"Input: **{width} × {height}** → Output target: **{t_size[0]} × {t_size[1]}** pixels "
-            f"({scale_factor}× magnification)"
-        )
-    else:
-        t_size = (width, height)
-        eval_tiny_w = max(1, width // scale_factor)
-        eval_tiny_h = max(1, height // scale_factor)
-        st.info(
-            f"Scientific mode: Simulating degradation to **{eval_tiny_w}×{eval_tiny_h}** "
-            f"then reconstructing to **{width}×{height}** for benchmarking."
-        )
+    t_size = (int(width * scale_factor), int(height * scale_factor))
+    st.info(
+        f"Pipeline Target: **{width} × {height}** → **{t_size[0]} × {t_size[1]}** pixels "
+        f"({scale_factor}× magnification) with Scientific Benchmarks."
+    )
 
     if st.button("🚀 Run Sharp-First IVP Pipeline", use_container_width=True, type="primary"):
         with st.spinner("Crunching pixels through the IVP pipeline..."):
 
-            if "Practical" in operation_mode:
-                # ── De-blockify pre-pass ──
-                if apply_pixel_art and block_size > 1:
-                    tiny_w = max(1, width // block_size)
-                    tiny_h = max(1, height // block_size)
-                    destroyed_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
-                    st.info(f"De-blockify: crushed to structural base **{tiny_w}×{tiny_h}** px")
-                else:
-                    destroyed_img = low_res
-
-                # ── Primary upscale ──
-                # ── Primary upscale ──
-                # ── Primary upscale ──
-                if "ESPCN" in upscale_method:
-                    base_up = apply_espcn(destroyed_img)
-
-                    # Resize to match target size
-                    base_up = cv2.resize(base_up, t_size, interpolation=cv2.INTER_CUBIC)
-
-                    output = advanced_sharpen(base_up, strength=1.3, edge_boost=1.1) # FINAL OUTPUT (AI)
-
-                elif "Lanczos" in upscale_method:
-                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LANCZOS4)
-
-                    ivp_output = enhance_output(
-                        base_up,
-                        lr_source=destroyed_img,
-                        ibp_iters=2,
-                        fft_boost=0.2,
-                        usm_sigma=0.5,
-                        edge_strength=0.25,
-                    )
-
-                    denoised = denoise_before_sharpen(ivp_output)
-                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
-
-                else:
-                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_CUBIC)
-
-                    ivp_output = enhance_output(
-                        base_up,
-                        lr_source=destroyed_img,
-                        ibp_iters=2,
-                        fft_boost=0.2,
-                        usm_sigma=0.5,
-                        edge_strength=0.25,
-                    )
-
-                    denoised = denoise_before_sharpen(ivp_output)
-                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
-                st.session_state["input_preview"] = cv2.resize(
-                    low_res, t_size, interpolation=cv2.INTER_NEAREST
-                )
-                st.session_state["eval_metrics"] = None
-
+            # ── 1. Create the REAL output that the user gets ──
+            if apply_pixel_art and block_size > 1:
+                tiny_w = max(1, width // block_size)
+                tiny_h = max(1, height // block_size)
+                destroyed_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
+                st.info(f"De-blockify: crushed to structural base **{tiny_w}×{tiny_h}** px")
             else:
-                destroyed_img = cv2.resize(
-                low_res, (eval_tiny_w, eval_tiny_h), interpolation=cv2.INTER_AREA
-                )
-                if "ESPCN" in upscale_method:
-                    base_up = apply_espcn(destroyed_img)
-                    base_up = cv2.resize(base_up, t_size, interpolation=cv2.INTER_CUBIC)
-                    output = advanced_sharpen(base_up, strength=1.2, edge_boost=1.0)
+                destroyed_img = low_res
 
-                elif "Lanczos" in upscale_method:
-                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LANCZOS4)
+            if "ESPCN" in upscale_method:
+                base_up = apply_espcn(destroyed_img)
+                base_up = cv2.resize(base_up, t_size, interpolation=cv2.INTER_CUBIC)
+                output = advanced_sharpen(base_up, strength=1.3, edge_boost=1.1)
+            elif "Lanczos" in upscale_method:
+                base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LANCZOS4)
+                ivp_output = enhance_output(base_up, lr_source=destroyed_img, ibp_iters=2, fft_boost=0.2, usm_sigma=0.5, edge_strength=0.25)
+                denoised = denoise_before_sharpen(ivp_output)
+                output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
+            else:
+                base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_CUBIC)
+                ivp_output = enhance_output(base_up, lr_source=destroyed_img, ibp_iters=2, fft_boost=0.2, usm_sigma=0.5, edge_strength=0.25)
+                denoised = denoise_before_sharpen(ivp_output)
+                output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
 
-                    ivp_output = enhance_output(
-                        base_up,
-                        lr_source=destroyed_img,
-                        ibp_iters=2,
-                        fft_boost=0.2,
-                        usm_sigma=0.5,
-                        edge_strength=0.25,
-                    )
+            st.session_state["input_preview"] = cv2.resize(
+                low_res, t_size, interpolation=cv2.INTER_NEAREST
+            )
 
-                    denoised = denoise_before_sharpen(ivp_output)
-                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
+            # ── 2. Run SCIENTIFIC BACKGROUND BENCHMARKS against original resolution ──
+            eval_tiny_w = max(1, width // scale_factor)
+            eval_tiny_h = max(1, height // scale_factor)
+            sim_degraded = cv2.resize(low_res, (eval_tiny_w, eval_tiny_h), interpolation=cv2.INTER_AREA)
+            
+            orig_t_size = (width, height)
+            
+            n_out = cv2.resize(sim_degraded, orig_t_size, interpolation=cv2.INTER_NEAREST)
+            b_out = cv2.resize(sim_degraded, orig_t_size, interpolation=cv2.INTER_LINEAR)
+            bc_out = upscale_bicubic(sim_degraded, orig_t_size, apply_enhancement=True)
+            lz_out = upscale_lanczos(sim_degraded, orig_t_size, apply_enhancement=True)
+            
+            espcn_out = apply_espcn(sim_degraded)
+            espcn_out = cv2.resize(espcn_out, orig_t_size, interpolation=cv2.INTER_CUBIC)
 
-                else:
-                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_CUBIC)
-
-                    ivp_output = enhance_output(
-                        base_up,
-                        lr_source=destroyed_img,
-                        ibp_iters=2,
-                        fft_boost=0.2,
-                        usm_sigma=0.5,
-                        edge_strength=0.25,
-                    )
-
-                    denoised = denoise_before_sharpen(ivp_output)
-                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
-
-                # ── Compute all 4 for benchmarks ──
-                n_out = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_NEAREST)
-                b_out = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LINEAR)
-                bc_out = upscale_bicubic(destroyed_img, t_size, apply_enhancement=True)
-                lz_out = upscale_lanczos(destroyed_img, t_size, apply_enhancement=True)
-                espcn_out = apply_espcn(destroyed_img)
-                espcn_out = cv2.resize(espcn_out, t_size, interpolation=cv2.INTER_CUBIC)
-
-                st.session_state["eval_metrics"] = {
-                    "Nearest Neighbor": compute_metrics(low_res, n_out),
-                    "Bilinear":         compute_metrics(low_res, b_out),
-                    "Bicubic + IVP":    compute_metrics(low_res, bc_out),
-                    "Lanczos-4 + IVP":  compute_metrics(low_res, lz_out),
-                    "ESPCN (AI)":       compute_metrics(low_res, espcn_out),
-                }
-                st.session_state["input_preview"] = cv2.resize(
-                    destroyed_img,
-                    t_size,
-                    interpolation=cv2.INTER_NEAREST
-                )
+            st.session_state["eval_metrics"] = {
+                "Nearest Neighbor": compute_metrics(low_res, n_out),
+                "Bilinear":         compute_metrics(low_res, b_out),
+                "Bicubic + IVP":    compute_metrics(low_res, bc_out),
+                "Lanczos-4 + IVP":  compute_metrics(low_res, lz_out),
+                "ESPCN (AI)":       compute_metrics(low_res, espcn_out),
+            }
 
             st.session_state["base_upscaled"] = output
             st.session_state["target_size"]   = t_size
