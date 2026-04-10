@@ -138,9 +138,15 @@ if uploaded_file is not None:
                 denoised = denoise_before_sharpen(ivp_output)
                 output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
 
-            st.session_state["input_preview"] = cv2.resize(
-                low_res, t_size, interpolation=cv2.INTER_NEAREST
-            )
+            if "ESPCN" in upscale_method:
+                broken_down = cv2.resize(low_res, (max(1, width // 4), max(1, height // 4)), interpolation=cv2.INTER_AREA)
+                st.session_state["input_preview"] = cv2.resize(
+                    broken_down, t_size, interpolation=cv2.INTER_NEAREST
+                )
+            else:
+                st.session_state["input_preview"] = cv2.resize(
+                    low_res, t_size, interpolation=cv2.INTER_NEAREST
+                )
 
             # ── 2. Run SCIENTIFIC BACKGROUND BENCHMARKS against original resolution ──
             eval_tiny_w = max(1, width // scale_factor)
