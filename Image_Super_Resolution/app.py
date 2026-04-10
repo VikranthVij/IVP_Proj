@@ -7,7 +7,7 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
-
+from image_enhancement import advanced_sharpen, denoise_before_sharpen
 sys.path.append(os.path.dirname(__file__))
 from src.main import (
     upscale_bicubic,
@@ -17,6 +17,7 @@ from src.main import (
     compute_metrics,
     enhance_output,
 )
+
 import pandas as pd
 from streamlit_image_comparison import image_comparison
 
@@ -26,7 +27,16 @@ st.set_page_config(
     page_title="IVP Super-Resolution Studio",
     page_icon="🔬"
 )
+@st.cache_resource
+def load_espcn():
+    sr = cv2.dnn_superres.DnnSuperResImpl_create()
+    sr.readModel("Image_Super_Resolution/data/ESPCN_x4.pb")
+    sr.setModel("espcn", 4)
+    return sr
 
+def apply_espcn(image):
+    sr = load_espcn()
+    return sr.upsample(image)
 # ──────────────────────────────────────────────────────────────────────────────
 #  HEADER
 # ──────────────────────────────────────────────────────────────────────────────
@@ -53,7 +63,11 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Upscaling Engine")
 upscale_method = st.sidebar.radio(
     "Algorithm:",
-    ["Lanczos-4  ·  Advanced IVP (Recommended)", "Bicubic  ·  Standard Math"]
+    [
+        "Lanczos-4  ·  Advanced IVP (Recommended)",
+        "Bicubic  ·  Standard Math",
+        "ESPCN (AI Super Resolution)"
+    ]
 )
 
 scale_factor = st.sidebar.slider(
@@ -120,65 +134,115 @@ if uploaded_file is not None:
                 if apply_pixel_art and block_size > 1:
                     tiny_w = max(1, width // block_size)
                     tiny_h = max(1, height // block_size)
-                    work_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
+                    destroyed_img = cv2.resize(low_res, (tiny_w, tiny_h), interpolation=cv2.INTER_AREA)
                     st.info(f"De-blockify: crushed to structural base **{tiny_w}×{tiny_h}** px")
                 else:
-                    work_img = low_res
+                    destroyed_img = low_res
 
                 # ── Primary upscale ──
-                if "Lanczos" in upscale_method:
-                    base_up = cv2.resize(work_img, t_size, interpolation=cv2.INTER_LANCZOS4)
+                # ── Primary upscale ──
+                # ── Primary upscale ──
+                if "ESPCN" in upscale_method:
+                    base_up = apply_espcn(destroyed_img)
+
+                    # Resize to match target size
+                    base_up = cv2.resize(base_up, t_size, interpolation=cv2.INTER_CUBIC)
+
+                    output = advanced_sharpen(base_up, strength=1.3, edge_boost=1.1) # FINAL OUTPUT (AI)
+
+                elif "Lanczos" in upscale_method:
+                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LANCZOS4)
+
+                    ivp_output = enhance_output(
+                        base_up,
+                        lr_source=destroyed_img,
+                        ibp_iters=2,
+                        fft_boost=0.2,
+                        usm_sigma=0.5,
+                        edge_strength=0.25,
+                    )
+
+                    denoised = denoise_before_sharpen(ivp_output)
+                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
+
                 else:
-                    base_up = cv2.resize(work_img, t_size, interpolation=cv2.INTER_CUBIC)
+                    base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_CUBIC)
 
-                # ── Sharp-First Enhancement ──
-                output = enhance_output(
-                    base_up,
-                    lr_source=work_img,
-                    ibp_iters=DEFAULT_IBP_ITERS,
-                    fft_boost=DEFAULT_FFT_BOOST,
-                    usm_sigma=DEFAULT_USM_SIGMA,
-                    edge_strength=DEFAULT_EDGE_STRENGTH,
-                )
+                    ivp_output = enhance_output(
+                        base_up,
+                        lr_source=destroyed_img,
+                        ibp_iters=2,
+                        fft_boost=0.2,
+                        usm_sigma=0.5,
+                        edge_strength=0.25,
+                    )
 
+                    denoised = denoise_before_sharpen(ivp_output)
+                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
                 st.session_state["input_preview"] = cv2.resize(
                     low_res, t_size, interpolation=cv2.INTER_NEAREST
                 )
                 st.session_state["eval_metrics"] = None
 
             else:
-                # ── Scientific Evaluation ──
                 destroyed_img = cv2.resize(
-                    low_res, (eval_tiny_w, eval_tiny_h), interpolation=cv2.INTER_AREA
+                low_res, (eval_tiny_w, eval_tiny_h), interpolation=cv2.INTER_AREA
                 )
+                if "ESPCN" in upscale_method:
+                    base_up = apply_espcn(destroyed_img)
+                    base_up = cv2.resize(base_up, t_size, interpolation=cv2.INTER_CUBIC)
+                    output = advanced_sharpen(base_up, strength=1.2, edge_boost=1.0)
 
-                if "Lanczos" in upscale_method:
+                elif "Lanczos" in upscale_method:
                     base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LANCZOS4)
+
+                    ivp_output = enhance_output(
+                        base_up,
+                        lr_source=destroyed_img,
+                        ibp_iters=2,
+                        fft_boost=0.2,
+                        usm_sigma=0.5,
+                        edge_strength=0.25,
+                    )
+
+                    denoised = denoise_before_sharpen(ivp_output)
+                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
+
                 else:
                     base_up = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_CUBIC)
 
-                output = enhance_output(
-                    base_up,
-                    lr_source=destroyed_img,
-                    ibp_iters=DEFAULT_IBP_ITERS,
-                    fft_boost=DEFAULT_FFT_BOOST,
-                    usm_sigma=DEFAULT_USM_SIGMA,
-                    edge_strength=DEFAULT_EDGE_STRENGTH,
-                )
+                    ivp_output = enhance_output(
+                        base_up,
+                        lr_source=destroyed_img,
+                        ibp_iters=2,
+                        fft_boost=0.2,
+                        usm_sigma=0.5,
+                        edge_strength=0.25,
+                    )
+
+                    denoised = denoise_before_sharpen(ivp_output)
+                    output = advanced_sharpen(denoised, strength=2.2, edge_boost=1.8)
 
                 # ── Compute all 4 for benchmarks ──
                 n_out = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_NEAREST)
                 b_out = cv2.resize(destroyed_img, t_size, interpolation=cv2.INTER_LINEAR)
                 bc_out = upscale_bicubic(destroyed_img, t_size, apply_enhancement=True)
                 lz_out = upscale_lanczos(destroyed_img, t_size, apply_enhancement=True)
+                espcn_out = apply_espcn(destroyed_img)
+                espcn_out = cv2.resize(espcn_out, t_size, interpolation=cv2.INTER_CUBIC)
 
                 st.session_state["eval_metrics"] = {
                     "Nearest Neighbor": compute_metrics(low_res, n_out),
                     "Bilinear":         compute_metrics(low_res, b_out),
                     "Bicubic + IVP":    compute_metrics(low_res, bc_out),
                     "Lanczos-4 + IVP":  compute_metrics(low_res, lz_out),
+                    "ESPCN (AI)":       compute_metrics(low_res, espcn_out),
                 }
-                st.session_state["input_preview"] = low_res  # slider: ground truth vs output
+                st.session_state["input_preview"] = cv2.resize(
+                    destroyed_img,
+                    t_size,
+                    interpolation=cv2.INTER_NEAREST
+                )
 
             st.session_state["base_upscaled"] = output
             st.session_state["target_size"]   = t_size
@@ -391,7 +455,12 @@ if "base_upscaled" in st.session_state:
 
     is_success, buffer = cv2.imencode(".png", cv2.cvtColor(final_output, cv2.COLOR_RGB2BGR))
     io_buf = io.BytesIO(buffer)
-    tag = "Lanczos4_IVP" if "Lanczos" in u_method else "Bicubic_IVP"
+    if "ESPCN" in u_method:
+        tag = "ESPCN_AI"
+    elif "Lanczos" in u_method:
+        tag = "Lanczos4_IVP"
+    else:
+        tag = "Bicubic_IVP"
     file_name = f"{tag}_Sharp_{t_size[0]}x{t_size[1]}.png"
 
     st.download_button(
