@@ -30,7 +30,9 @@ st.set_page_config(
 @st.cache_resource
 def load_espcn():
     sr = cv2.dnn_superres.DnnSuperResImpl_create()
-    sr.readModel("Image_Super_Resolution/data/ESPCN_x4.pb")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(base_dir, "data", "ESPCN_x4.pb")
+    sr.readModel(model_path)
     sr.setModel("espcn", 4)
     return sr
 
